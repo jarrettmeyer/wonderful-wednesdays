@@ -1,0 +1,293 @@
+---
+title: "Wonderful Wednesday Sep 8, 2021"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+## Setup
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggmosaic)
+  library(ggplot2)
+  library(knitr)
+  library(readr)
+  library(tidyr)
+})
+```
+
+```{r read-source-csv}
+path_to_source_csv <- file.path(".", "journal.pone.0249231.s004.csv")
+source_df <- read_csv(path_to_source_csv, show_col_types = FALSE)
+head(source_df, n = 10)
+```
+
+## Shaping the Data Frame
+
+```{r column-types}
+binary_columns <- c(
+  "adm_ace_arb",
+  "immunocompromised",
+  "sympt_fever",
+  "sympt_dyspnea"
+)
+
+factor_columns <- c(
+  "adm_anticoag",
+  "comorb_cvd",
+  "comorb_cvd_hypertension",
+  "comorb_dm",
+  "comorb_pulm_dis",
+  "xray_new"
+)
+
+status_columns <- c("status")
+
+numeric_columns <- c(
+  "age",
+  "bmi",
+  "ct_sevscore_total",
+  "sympt_duration", "mews",
+  "adm_neutrotolymphorate",
+  "adm_ldh",
+  "adm_creat",
+  "adm_procalcitonin",
+  "adm_crp",
+  "adm_ferritin",
+  "adm_ddimer_new",
+  "ftime"
+)
+
+categorical_columns <- c(binary_columns, factor_columns)
+```
+
+```{r transform-functions}
+transform_binary <- function(col) {
+  factor(
+    if_else(col == 0, "No", "Yes")
+  )
+}
+
+transform_status <- function(col) {
+  factor(
+    if_else(col == 0, "Censored", if_else(col == 1, "Died", "Recovered"))
+  )
+}
+```
+
+### Parsed Data Frame
+
+```{r parsed-data-frame}
+parsed_df <- source_df %>%
+  mutate_at(factor_columns, factor) %>%
+  mutate_at(binary_columns, transform_binary) %>%
+  mutate_at(status_columns, transform_status)
+head(parsed_df, n = 10)
+```
+
+### Uncensored Data Frame
+
+Remove all rows where the `status` is `Censored`.
+
+```{r uncensored-data-frame}
+uncensored_df <- parsed_df %>% filter(status != "Censored")
+head(uncensored_df, n = 10)
+```
+
+## Regression Models
+
+```{r calculate-adjusted-alpha}
+input_columns <- c(binary_columns, factor_columns, numeric_columns)
+count_input_cols <- length(input_columns)
+alpha <- 0.05
+adjusted_alpha <- alpha / count_input_cols
+
+print(count_input_cols)
+print(alpha)
+print(adjusted_alpha)
+```
+
+### Numeric Models
+
+```{r numeric-data-frame}
+numeric_df <- uncensored_df %>%
+  pivot_longer(
+    all_of(numeric_columns),
+    names_to = "name",
+    values_to = "value",
+    values_drop_na = TRUE
+  ) %>%
+  select(name, value, status) %>%
+  mutate(status = if_else(status == "Died", 0, 1))
+
+head(numeric_df, n = 20)
+```
+
+```{r create-numeric-models}
+numeric_models <- data.frame(
+  name = numeric_df %>%
+    select(name) %>%
+    distinct() %>%
+    arrange(name)
+)
+head(numeric_models, n = length(numeric_columns))
+
+numeric_models$fit <- lapply(
+  numeric_models$name,
+  function(column_name) {
+    tmp_df <- numeric_df %>%
+      filter(name == column_name)
+    lm(status ~ value, tmp_df)
+  }
+)
+
+numeric_models$summary <- lapply(
+  numeric_models$fit,
+  function(fit) {
+    summary(fit)
+  }
+)
+
+numeric_models$fstat <- lapply(
+  numeric_models$summary,
+  function(summary) {
+    summary$fstatistic
+  }
+)
+
+numeric_models$quant <- sapply(
+  numeric_models$fstat,
+  function(fstat) {
+    fstat[1]
+  }
+)
+
+numeric_models$df1 <- sapply(
+  numeric_models$fstat,
+  function(fstat) {
+    fstat[2]
+  }
+)
+
+numeric_models$df2 <- sapply(
+  numeric_models$fstat,
+  function(fstat) {
+    fstat[3]
+  }
+)
+
+numeric_models$pval <- sapply(
+  numeric_models$fstat,
+  function(fstat) {
+    pf(fstat[1], fstat[2], fstat[3], lower.tail = FALSE)
+  }
+)
+
+numeric_models <- numeric_models %>% filter(pval < adjusted_alpha)
+head(numeric_models %>% select(name, quant, df1, df2, pval), n = 10)
+```
+
+### Categorical Models
+
+```{r categorical-data-frame}
+cat_df <- uncensored_df %>%
+  pivot_longer(
+    all_of(categorical_columns),
+    names_to = "name",
+    values_to = "value",
+    values_drop_na = TRUE
+  )
+head(cat_df, n = 20)
+```
+
+```{r create-categorical-models}
+cat_models <- data.frame(
+  name = cat_df %>%
+    select(name) %>%
+    distinct() %>%
+    arrange(name)
+)
+
+cat_models$chisq <- lapply(
+  cat_models$name,
+  function(col_name) {
+    tmp_df <- cat_df %>% filter(name == col_name)
+    chisq.test(tmp_df$value, tmp_df$status)
+  }
+)
+
+cat_models$pval <- sapply(
+  cat_models$chisq,
+  function(cs) {
+    cs$p.value[[1]][1]
+  }
+)
+
+cat_models <- cat_models %>% filter(pval < adjusted_alpha)
+head(cat_models %>% select(name, pval), n = 10)
+```
+
+## Figures
+
+### Numeric Variables
+
+```{r fig.width=6.5}
+numeric_plot <- numeric_df %>%
+  filter(name %in% numeric_models$name) %>%
+  mutate(disp_name = case_when(
+    name == "adm_creat" ~ "Creatinine",
+    name == "adm_crp" ~ "C-reactive protein",
+    name == "adm_ldh" ~ "Lactate dehydrogenase",
+    name == "adm_neutrotolymphorate" ~ "Neutrophil-lymphocyte ratio",
+    name == "age" ~ "Age",
+    name == "ct_sevscore_total" ~ "CT severity",
+    TRUE ~ name
+  ))
+
+ggplot(numeric_plot, aes(x = value, y = status)) +
+  geom_smooth(
+    method = lm,
+    color = "red"
+  ) +
+  geom_point(
+    color = "blue",
+    alpha = 0.1
+  ) +
+  scale_y_continuous(
+    breaks = c(0, 1),
+    labels = c("Died", "Recovered")
+  ) +
+  facet_wrap(. ~ disp_name, scales = "free_x", ncol = 2) +
+  theme_bw() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank()
+  )
+```
+
+### Categorical Variables
+
+```{r fig.width=6.5, fig.height=3}
+cat_plot <- cat_df %>%
+  filter(name %in% cat_models$name) %>%
+  mutate_at(c("name", "value", "status"), as.character) %>%
+  mutate(disp_name = case_when(
+    name == "adm_anticoag" ~ "Anticoagulant",
+    name == "comorb_cvd" ~ "CVT",
+    name == "sympt_fever" ~ "Fever",
+    TRUE ~ name
+  ))
+
+ggplot(cat_plot) +
+  geom_mosaic(aes(x = product(status, value), fill = status)) +
+  scale_fill_manual(values = c("Died" = "#B24C63", "Recovered" = "#357DED")) +
+  facet_wrap(. ~ disp_name) +
+  theme_bw() +
+  theme(
+    legend.position = "",
+    panel.grid = element_blank()
+  )
+```

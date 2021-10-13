@@ -29,13 +29,41 @@ export interface UnparsedCSVDatum {
   xray_new: "Done, susp" | "Done, not susp" | "Not done";
 }
 
+export interface ParsedCSVDatum {
+  admAceArb: boolean | null;
+  admAnticoag: boolean | null;
+  admCreat: number | null;
+  admCrp: number | null;
+  admDdimerNew: number | null;
+  adm_Ferritin: number | null;
+  admLdh: number | null;
+  admNeutrotolymphorate: number | null;
+  admProcalcitonin: string;
+  age: number;
+  bmi: number | null;
+  comorbCvd: boolean | null;
+  comorbCvdHypertension: boolean | null;
+  comorbDm: boolean | null;
+  comorbPulmSis: boolean | null;
+  ctSevscoreTotal: number | null;
+  ftime: number;
+  immunocompromised: boolean | null;
+  mews: number | null;
+  sex: "female" | "male";
+  status: 0 | 1 | 2;
+  symptDuration: number | null;
+  symptDyspnea: boolean | null;
+  symptFever: boolean | null;
+  symptSevscoreTotal: number | null;
+  xrayNew: "Done, susp" | "Done, not susp" | "Not done";
+}
+
 export default class CSVReader {
   source = "./data/journal.pone.0249231.s004.csv";
-  unparsed = [];
+  unparsedData = [];
 
   async read(): Promise<UnparsedCSVDatum[]> {
-    this.unparsed = await d3.csv(this.source, d3.autoType);
-    console.log(this.unparsed);
-    return this.unparsed;
+    this.unparsedData = await d3.csv(this.source, d3.autoType);
+    return this.unparsedData;
   }
 }
